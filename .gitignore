@@ -1,0 +1,5 @@
+node_modules/
+coverage/
+pi-gibbon.json
+*.log
+.DS_Store
