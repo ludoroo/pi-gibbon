@@ -46,28 +46,24 @@ export function parseConfig(value: unknown): PiGibbonConfig {
 
 export function resolveBackend(
 	configured: BackendName,
-	requested: BackendName | undefined,
 	worktrunkAvailable: boolean,
 ): ResolvedBackendName {
-	const selected = requested ?? configured;
-	if (selected === "auto") return worktrunkAvailable ? "worktrunk" : "git";
-	if (selected === "worktrunk" && !worktrunkAvailable) {
+	if (configured === "auto") return worktrunkAvailable ? "worktrunk" : "git";
+	if (configured === "worktrunk" && !worktrunkAvailable) {
 		throw new Error('Worktree backend "worktrunk" requires the wt executable');
 	}
-	return selected;
+	return configured;
 }
 
 export function resolveMultiplexer(
 	configured: MultiplexerName,
-	requested: MultiplexerName | undefined,
 	herdrAvailable: boolean,
 ): ResolvedMultiplexerName {
-	const selected = requested ?? configured;
-	if (selected === "auto") return herdrAvailable ? "herdr" : "none";
-	if (selected === "herdr" && !herdrAvailable) {
+	if (configured === "auto") return herdrAvailable ? "herdr" : "none";
+	if (configured === "herdr" && !herdrAvailable) {
 		throw new Error('Multiplexer "herdr" requires HERDR_ENV=1, HERDR_PANE_ID, and the herdr executable');
 	}
-	return selected;
+	return configured;
 }
 
 export function parseGitWorktrees(raw: string): GitWorktree[] {

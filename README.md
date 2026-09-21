@@ -9,6 +9,8 @@ Its public identities are deliberately stable:
 - Internal coordination command: `/worktree-jump`
 - Configuration: `pi-gibbon.json`
 
+The tool exposes relocation intent only: `destination`, `branch`, `base`, and `label`. Worktree and terminal integration selection is configuration owned by the user; the LLM does not choose infrastructure adapters.
+
 ## Requirements
 
 - Pi 0.85.1 or newer
@@ -71,7 +73,7 @@ Set `PI_GIBBON_CONFIG` to read a different configuration file.
 - `none`: switch the current Pi runtime to the forked session
 - `tmux`: reserved, currently not implemented
 
-A tool call may override either configured adapter for one jump. For `destination: "new"`, `branch` is required. The compatibility mapping for an old `backend: "herdr"` request selects the Git backend and Herdr multiplexer.
+Adapter selection comes exclusively from this configuration. For `destination: "new"`, the tool requires `branch`; it does not expose backend or multiplexer controls to the LLM.
 
 `PI_GIBBON_READY_FILE` is an internal one-shot readiness handshake used when starting replacement Pi inside Herdr. It is not a persistent user setting.
 

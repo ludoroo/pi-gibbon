@@ -34,18 +34,15 @@ test("registers exactly one stable tool and one private finalize command", () =>
 	assert.match(String((tools[0]?.promptGuidelines as string[]).join("\n")), /Never use worktree_jump merely because isolation/);
 });
 
-test("legacy Herdr backend arguments retain their compatibility mapping", () => {
+test("tool schema exposes relocation intent but not infrastructure selection", () => {
 	const { tools } = registerExtension();
-	const prepareArguments = tools[0]?.prepareArguments as (args: Record<string, unknown>) => Record<string, unknown>;
-	assert.deepEqual(prepareArguments({ backend: "herdr", branch: "feature/test" }), {
-		backend: "git",
-		multiplexer: "herdr",
-		branch: "feature/test",
-	});
-	assert.deepEqual(prepareArguments({ backend: "git", multiplexer: "none" }), {
-		backend: "git",
-		multiplexer: "none",
-	});
+	const tool = tools[0];
+	const parameters = tool?.parameters as { properties: Record<string, unknown> };
+	assert.deepEqual(Object.keys(parameters.properties), ["destination", "branch", "base", "label"]);
+	assert.equal("backend" in parameters.properties, false);
+	assert.equal("multiplexer" in parameters.properties, false);
+	assert.equal(tool?.prepareArguments, undefined);
+	assert.match(String(tool?.description), /automatically uses the configured worktree and terminal integrations/);
 });
 
 test("session_start publishes and consumes the replacement readiness marker", async (t) => {

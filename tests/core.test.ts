@@ -22,19 +22,19 @@ test("config defaults and validates both adapter axes", () => {
 	assert.throws(() => parseConfig({ backend: "auto", extra: true }), /unknown field: extra/);
 });
 
-test("backend auto mode prefers Worktrunk and otherwise falls back to Git", () => {
-	assert.equal(resolveBackend("auto", undefined, true), "worktrunk");
-	assert.equal(resolveBackend("auto", undefined, false), "git");
-	assert.equal(resolveBackend("worktrunk", "git", false), "git");
-	assert.throws(() => resolveBackend("worktrunk", undefined, false), /requires the wt executable/);
+test("configured backend auto mode prefers Worktrunk and otherwise falls back to Git", () => {
+	assert.equal(resolveBackend("auto", true), "worktrunk");
+	assert.equal(resolveBackend("auto", false), "git");
+	assert.equal(resolveBackend("git", false), "git");
+	assert.throws(() => resolveBackend("worktrunk", false), /requires the wt executable/);
 });
 
-test("multiplexer auto mode uses Herdr only when its runtime is available", () => {
-	assert.equal(resolveMultiplexer("auto", undefined, true), "herdr");
-	assert.equal(resolveMultiplexer("auto", undefined, false), "none");
-	assert.equal(resolveMultiplexer("herdr", "none", false), "none");
-	assert.throws(() => resolveMultiplexer("herdr", undefined, false), /requires HERDR_ENV=1/);
-	assert.equal(resolveMultiplexer("auto", "tmux", true), "tmux");
+test("configured multiplexer auto mode uses Herdr only when its runtime is available", () => {
+	assert.equal(resolveMultiplexer("auto", true), "herdr");
+	assert.equal(resolveMultiplexer("auto", false), "none");
+	assert.equal(resolveMultiplexer("none", false), "none");
+	assert.throws(() => resolveMultiplexer("herdr", false), /requires HERDR_ENV=1/);
+	assert.equal(resolveMultiplexer("tmux", true), "tmux");
 });
 
 test("Git porcelain parsing keeps primary order, detached state, and bare state", () => {

@@ -16,15 +16,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import {
-	BACKEND_NAMES,
 	consumePending,
 	dispatchPending,
 	parseGitWorktrees,
 	planGitWorktreePath,
 	resolveBackend,
 	resolveMultiplexer,
-	type BackendName,
-	type MultiplexerName,
 	type ResolvedBackendName,
 	type ResolvedMultiplexerName,
 	type PiGibbonConfig,
@@ -36,16 +33,9 @@ type JumpDestination = "new" | "main";
 
 type JumpOptions = {
 	destination: JumpDestination;
-	backend?: BackendName;
-	multiplexer?: MultiplexerName;
 	branch?: string;
 	base?: string;
 	label?: string;
-};
-
-type ToolArguments = Omit<JumpOptions, "destination" | "multiplexer"> & {
-	destination?: JumpDestination;
-	multiplexer?: "auto" | "herdr" | "none";
 };
 
 type Repository = {
@@ -114,7 +104,6 @@ type MultiplexerAdapter = {
 
 const FINALIZE_COMMAND = "worktree-jump";
 const STATUS_KEY = "pi-gibbon";
-const TOOL_MULTIPLEXER_NAMES = ["auto", "herdr", "none"] as const;
 
 const BACKEND_ADAPTERS: Record<ResolvedBackendName, WorktreeBackendAdapter> = {
 	worktrunk: { create: createWorktrunkWorktree },
@@ -175,7 +164,7 @@ export default function (pi: ExtensionAPI) {
 		name: "worktree_jump",
 		label: "pi-gibbon · Worktree Jump",
 		description:
-			"Use pi-gibbon to relocate this Pi session to a linked Git worktree or back to the main checkout. Worktree creation and terminal multiplexing are independent, configurable adapters. The backend can use Worktrunk or native Git; Herdr and in-process relocation are supported multiplexer modes, while tmux is an explicit future adapter. This is an explicit session relocation, not a general isolation or worktree-planning tool.",
+			"Relocate this Pi session to a linked Git worktree or back to the repository's main checkout. Pi-gibbon automatically uses the configured worktree and terminal integrations. This is an explicit session relocation, not a general isolation or worktree-planning tool.",
 		promptSnippet: "Jump this Pi session to another worktree only when explicitly requested",
 		promptGuidelines: [
 			"Use worktree_jump only when the user explicitly asks to jump or move this Pi session into a new worktree or back to the repository's main checkout.",
@@ -187,45 +176,21 @@ export default function (pi: ExtensionAPI) {
 					description: "Use new to create/open a worktree, or main to return to the primary checkout. Defaults to new.",
 				}),
 			),
-			backend: Type.Optional(
-				StringEnum(BACKEND_NAMES, {
-					description: "Worktree backend. Defaults to the configured backend; auto prefers Worktrunk and falls back to Git.",
-				}),
-			),
-			multiplexer: Type.Optional(
-				StringEnum(TOOL_MULTIPLEXER_NAMES, {
-					description: "Session relocation adapter. Defaults to configuration; auto uses Herdr inside Herdr and otherwise none.",
-				}),
-			),
 			branch: Type.Optional(
-				Type.String({ description: "Branch name for destination=new. Required by the Worktrunk and Git backends." }),
+				Type.String({ description: "Branch name for destination=new. Required when creating or opening a worktree." }),
 			),
 			base: Type.Optional(
 				Type.String({
 					description: "Git ref used as the base when destination=new creates a branch. Defaults to the current checkout's HEAD.",
 				}),
 			),
-			label: Type.Optional(Type.String({ description: "Optional workspace label for multiplexer adapters that support one." })),
+			label: Type.Optional(Type.String({ description: "Optional destination workspace label when supported." })),
 		}),
-		prepareArguments(args) {
-			if (!args || typeof args !== "object") return args as ToolArguments;
-			const legacy = args as Record<string, unknown>;
-			if (legacy.backend === "herdr") {
-				return {
-					...legacy,
-					backend: "git",
-					multiplexer: legacy.multiplexer ?? "herdr",
-				} as ToolArguments;
-			}
-			return args as ToolArguments;
-		},
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (jumpInFlight) throw new Error("A worktree relocation is already pending");
 			jumpInFlight = true;
 			const options: JumpOptions = {
 				destination: params.destination ?? "new",
-				backend: params.backend,
-				multiplexer: params.multiplexer,
 				branch: cleanOptional(params.branch),
 				base: cleanOptional(params.base),
 				label: cleanOptional(params.label),
@@ -255,7 +220,7 @@ async function prepareJump(
 		throw new Error("branch, base, and label apply only when destination is new");
 	}
 
-	const selectedMultiplexer = options.multiplexer ?? config.multiplexer;
+	const selectedMultiplexer = config.multiplexer;
 	const shouldProbeHerdr = selectedMultiplexer === "auto" || selectedMultiplexer === "herdr";
 	const herdrAvailable =
 		shouldProbeHerdr &&
@@ -264,12 +229,12 @@ async function prepareJump(
 		(await executableExists(pi, "herdr", signal, ctx.cwd));
 	let backend: ResolvedBackendName | undefined;
 	if (options.destination === "new") {
-		const selectedBackend = options.backend ?? config.backend;
+		const selectedBackend = config.backend;
 		const worktrunkAvailable =
 			selectedBackend !== "git" && (await executableExists(pi, "wt", signal, ctx.cwd));
-		backend = resolveBackend(config.backend, options.backend, worktrunkAvailable);
+		backend = resolveBackend(config.backend, worktrunkAvailable);
 	}
-	const multiplexer = resolveMultiplexer(config.multiplexer, options.multiplexer, herdrAvailable);
+	const multiplexer = resolveMultiplexer(config.multiplexer, herdrAvailable);
 	MULTIPLEXER_ADAPTERS[multiplexer].validate?.();
 
 	ctx.ui.setStatus(STATUS_KEY, "resolving repository");

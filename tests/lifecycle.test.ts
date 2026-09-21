@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -28,6 +28,11 @@ async function prepareMainJump(
 		mkdir(linkedCheckout, { recursive: true }),
 		mkdir(agentDir, { recursive: true }),
 	]);
+	await writeFile(
+		join(agentDir, "pi-gibbon.json"),
+		`${JSON.stringify({ backend: "auto", multiplexer })}\n`,
+		"utf8",
+	);
 
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const previousConfig = process.env.PI_GIBBON_CONFIG;
@@ -134,7 +139,7 @@ async function prepareMainJump(
 	assert.ok(tool);
 	const result = await tool.execute(
 		"call",
-		{ destination: "main", multiplexer },
+		{ destination: "main" },
 		signal,
 		undefined,
 		{
