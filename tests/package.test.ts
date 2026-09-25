@@ -15,7 +15,10 @@ test("package has one explicit Pi entrypoint and no conventional duplicate entry
 	assert.deepEqual(manifest.files, ["src", "pi-gibbon.example.json", "THIRD_PARTY_NOTICES.md"]);
 	assert.equal(manifest.repository.url, "git+https://github.com/ludoroo/pi-gibbon.git");
 	assert.deepEqual(manifest.publishConfig, { access: "public" });
-	assert.deepEqual(manifest.pi, { extensions: ["./src/index.ts"] });
+	assert.deepEqual(manifest.pi, {
+		extensions: ["./src/index.ts"],
+		image: "https://raw.githubusercontent.com/ludoroo/pi-gibbon/main/media/logo.png",
+	});
 	assert.deepEqual(manifest.dependencies, undefined);
 	assert.deepEqual(manifest.peerDependencies, {
 		"@earendil-works/pi-ai": "*",

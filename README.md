@@ -110,7 +110,8 @@ Pi loads the extension through the package manifest:
 ```json
 {
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./src/index.ts"],
+    "image": "https://raw.githubusercontent.com/ludoroo/pi-gibbon/main/media/logo.png"
   }
 }
 ```
