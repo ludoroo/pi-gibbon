@@ -1,29 +1,52 @@
+![pi-gibbon — From one worktree to another](https://raw.githubusercontent.com/ludoroo/pi-gibbon/main/media/banner.png)
+
 # pi-gibbon
 
-`pi-gibbon` is a [Pi](https://github.com/badlogic/pi-mono) package for safely relocating an active Pi session between Git worktrees.
+[![CI](https://github.com/ludoroo/pi-gibbon/actions/workflows/ci.yml/badge.svg)](https://github.com/ludoroo/pi-gibbon/actions/workflows/ci.yml)
+[![release](https://img.shields.io/npm/v/pi-gibbon?label=release)](https://www.npmjs.com/package/pi-gibbon)
+[![license: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-Its public identities are deliberately stable:
+Keep your [Pi](https://github.com/badlogic/pi-mono) session moving with your code: pi-gibbon swings the full conversation into another Git worktree—and, in Herdr, into its destination workspace—without missing a beat.
 
-- Package/product: `pi-gibbon`
-- LLM-facing tool: `worktree_jump`
-- Internal coordination command: `/worktree-jump`
-- Configuration: `pi-gibbon.json`
+## What it does
 
-The tool exposes relocation intent only: `destination`, `branch`, `base`, and `label`. Worktree and terminal integration selection is configuration owned by the user; the LLM does not choose infrastructure adapters.
+When a task should continue on a different branch, ask Pi to move the current session. `pi-gibbon` will:
+
+1. Create or open the requested Git worktree.
+2. Fork the complete Pi session into that checkout.
+3. Start the replacement session in the new working directory.
+4. Continue the conversation with its existing context intact.
+5. Clean up the source session only after the replacement is ready.
+
+With [Herdr](https://github.com/qu8n/herdr), the replacement runs in the destination workspace. If you switch to another workspace while the jump is being prepared, `pi-gibbon` leaves the destination in the background instead of stealing focus. Outside Herdr, Pi switches sessions in the current process.
+
+Worktrees can be managed through [Worktrunk](https://worktrunk.dev/) or native Git. In the default `auto` mode, `pi-gibbon` uses Worktrunk when available and falls back to Git.
+
+## How to use it
+
+Ask Pi explicitly to relocate the current session:
+
+> Move this session to a new worktree on branch `fix/login-race`.
+
+You can optionally name a base ref or destination workspace:
+
+> Move this session to a new worktree on branch `experiment/cache`, based on `main`, and label it `cache experiment`.
+
+To return to the repository's primary checkout:
+
+> Move this session back to the main checkout.
+
+The extension deliberately acts only on explicit relocation requests. Creating a checkout or discussing worktree strategy does not move the session.
 
 ## Requirements
 
 - Pi 0.85.1 or newer
 - Node.js 22.19.0 or newer
 - Git
-- Optional [Worktrunk](https://worktrunk.dev/) executable `wt`
-- Optional [Herdr](https://github.com/qu8n/herdr) runtime and executable
-
-Native Git is the fallback worktree backend. Outside Herdr, Pi can switch to the forked session in process. The `tmux` adapter name is reserved but intentionally reports that it is not implemented.
+- Optional: [Worktrunk](https://worktrunk.dev/) executable `wt`
+- Optional: [Herdr](https://github.com/qu8n/herdr) runtime and executable
 
 ## Install
-
-Install the package from npm:
 
 ```sh
 pi install npm:pi-gibbon
@@ -35,19 +58,11 @@ Update it later with:
 pi update npm:pi-gibbon
 ```
 
-Pi loads exactly one declared entrypoint from `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./src/index.ts"]
-  }
-}
-```
-
 ## Configuration
 
-The real configuration stays outside this package. Copy [`pi-gibbon.example.json`](pi-gibbon.example.json) to `pi-gibbon.json` in Pi's agent directory (normally `~/.pi/agent`, or `PI_CODING_AGENT_DIR`):
+No configuration is required. By default, `pi-gibbon` automatically selects the available worktree and terminal integrations.
+
+To override those defaults, copy [`pi-gibbon.example.json`](pi-gibbon.example.json) to `pi-gibbon.json` in Pi's agent directory—normally `~/.pi/agent`, or `PI_CODING_AGENT_DIR` when set:
 
 ```json
 {
@@ -58,38 +73,61 @@ The real configuration stays outside this package. Copy [`pi-gibbon.example.json
 
 Set `PI_GIBBON_CONFIG` to read a different configuration file.
 
-### Backend
+### Worktree backend
 
-- `auto`: prefer `wt`, otherwise use native Git
-- `worktrunk`: require `wt`
+- `auto`: prefer Worktrunk, otherwise use native Git
+- `worktrunk`: require the `wt` executable
 - `git`: use native Git worktree commands
 
-### Multiplexer
+### Terminal integration
 
 - `auto`: use Herdr when Pi is running in a valid Herdr pane; otherwise switch in process
 - `herdr`: require `HERDR_ENV=1`, `HERDR_PANE_ID`, and the `herdr` executable
 - `none`: switch the current Pi runtime to the forked session
 - `tmux`: reserved, currently not implemented
 
-Adapter selection comes exclusively from this configuration. For `destination: "new"`, the tool requires `branch`; it does not expose backend or multiplexer controls to the LLM.
+Adapter selection belongs to user configuration; the LLM cannot choose a backend or multiplexer.
 
-`PI_GIBBON_READY_FILE` is an internal one-shot readiness handshake used when starting replacement Pi inside Herdr. It is not a persistent user setting.
+## Tool reference
+
+`pi-gibbon` registers one LLM-facing tool:
+
+```text
+worktree_jump
+```
+
+It accepts:
+
+- `destination`: `new` or `main`; defaults to `new`
+- `branch`: branch to create or open; required for `destination: new`
+- `base`: optional starting ref when creating a branch
+- `label`: optional destination workspace label
+
+The internal `/worktree-jump` command and `PI_GIBBON_READY_FILE` environment variable coordinate relocation. They are not user-facing configuration.
+
+Pi loads the extension through the package manifest:
+
+```json
+{
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}
+```
 
 ## Safety model
 
-Worktree materialization and session relocation are separate operations:
+Worktree creation and session relocation are separate operations:
 
-1. The selected backend resolves or creates a checkout and returns `{ worktreePath, branch }`.
-2. `worktree_jump` synchronously queues `/worktree-jump` with a private token.
-3. The command waits for the current agent turn to become idle, ensuring the tool result is persisted.
-4. If the original tool call was aborted, finalization stops and retains the checkout.
-5. Otherwise the complete session is forked into the destination cwd and the selected multiplexer adapter relocates Pi.
+1. The selected backend resolves or creates the checkout.
+2. `worktree_jump` queues relocation after the current tool turn settles.
+3. Pi waits for the current agent turn to become idle, ensuring its result is saved.
+4. If the original request was aborted, relocation stops and retains the checkout.
+5. Otherwise, the complete session is forked into the destination working directory.
 
-For Herdr relocation, the destination is always opened without focus and replacement Pi must publish its `session_start` readiness marker before the source shuts down. Once ready, the destination is focused only when the originating workspace is still focused; if the user moved elsewhere while the jump was running, their current workspace remains uninterrupted. A failed or timed-out replacement is closed while the source remains active. Source session deletion and pane closure occur only after the source PID exits; a timeout preserves both rather than risking the live session.
+For Herdr relocation, the destination opens without focus and replacement Pi must report ready before the source shuts down. The destination receives focus only if the originating workspace is still focused. A failed or timed-out replacement is closed while the source remains active.
 
-For an in-process switch, cleanup and continuation use Pi's replacement session context rather than the stale source context.
-
-Use `worktree_jump` only when the user explicitly requests relocation. Checkout creation alone is not permission to move the session.
+Source-session deletion and pane closure occur only after the source process exits. A cleanup timeout preserves both sessions rather than risking the live one.
 
 ## Development
 
@@ -103,15 +141,12 @@ npm run check
 The checks include:
 
 - strict TypeScript type checking;
-- adapter, config, Git porcelain, pending-dispatch, cancellation, and cleanup tests;
-- end-to-end relocation lifecycle tests using real temporary sessions and mocked adapters;
-- Pi's real resource loader, asserting one tool and one command registration;
-- a production-style install omitting development and peer packages;
-- an isolated Pi RPC load of that production package.
+- adapter, configuration, Git porcelain, cancellation, and cleanup tests;
+- end-to-end relocation lifecycle tests with temporary sessions and mocked adapters;
+- Pi resource-loader verification for exactly one tool and command;
+- a production-style package installation and isolated Pi RPC load.
 
-Tests use mocks, temporary directories, and an isolated `PI_CODING_AGENT_DIR`. They do not relocate the active Pi session.
-
-GitHub Actions runs the same checks on Ubuntu 24.04 and macOS 14.
+Tests do not relocate the active development session. GitHub Actions runs the same checks on Ubuntu and macOS.
 
 ## Origin and license
 
