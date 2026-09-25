@@ -77,6 +77,14 @@ type TabCreated = {
 	root_pane?: { pane_id?: string };
 };
 
+type PaneCurrent = {
+	pane?: { workspace_id?: string };
+};
+
+type WorkspaceInfo = {
+	workspace?: { workspace_id?: string; focused?: boolean };
+};
+
 type WorktrunkSwitched = {
 	path?: string;
 	branch?: string;
@@ -492,6 +500,18 @@ async function relocateWithHerdr(
 	} finally {
 		await rm(readyFile, { force: true }).catch(() => undefined);
 	}
+
+	let focusWarning: string | undefined;
+	try {
+		// Herdr has no atomic conditional-focus command. Resolve the pane's live
+		// workspace immediately before focusing to keep this race window minimal.
+		if (await currentHerdrWorkspaceIsFocused(pi, jump.repository.mainCheckout)) {
+			await focusHerdrTarget(pi, target, jump.target.worktreePath);
+		}
+	} catch (error) {
+		focusWarning = errorMessage(error);
+	}
+
 	let cleanupWarning: string | undefined;
 	try {
 		await scheduleOldHerdrPaneCleanup(pi, jump.oldSessionFile, oldPaneId, process.pid);
@@ -500,6 +520,9 @@ async function relocateWithHerdr(
 	}
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(`Moved Pi session to Herdr worktree ${jump.target.worktreePath}`, "info");
+	if (focusWarning) {
+		ctx.ui.notify(`Destination was left in the background because focus could not be preserved safely: ${focusWarning}`, "warning");
+	}
 	if (cleanupWarning) ctx.ui.notify(`Old pane cleanup warning: ${cleanupWarning}`, "warning");
 	ctx.shutdown();
 }
@@ -511,7 +534,7 @@ async function openHerdrTarget(
 	worktreePath: string,
 	label?: string,
 ): Promise<{ workspaceId: string; tabId?: string; rootPaneId: string }> {
-	const args = ["worktree", "open", "--cwd", mainCheckout, "--path", worktreePath, "--focus"];
+	const args = ["worktree", "open", "--cwd", mainCheckout, "--path", worktreePath, "--no-focus"];
 	if (label) args.push("--label", label);
 	const response = await herdrJson<WorktreeOpened>(pi, args, signal, mainCheckout, 30_000);
 	const workspaceId = response.result?.workspace?.workspace_id;
@@ -520,7 +543,7 @@ async function openHerdrTarget(
 	if (response.result?.already_open) {
 		const tabResponse = await herdrJson<TabCreated>(
 			pi,
-			["tab", "create", "--workspace", workspaceId, "--cwd", worktreePath, "--focus"],
+			["tab", "create", "--workspace", workspaceId, "--cwd", worktreePath, "--no-focus"],
 			signal,
 			worktreePath,
 			10_000,
@@ -536,6 +559,40 @@ async function openHerdrTarget(
 	const rootPaneId = response.result?.root_pane?.pane_id;
 	if (!rootPaneId) throw new Error("Herdr worktree open response did not include root_pane.pane_id");
 	return { workspaceId, tabId: response.result?.tab?.tab_id, rootPaneId };
+}
+
+async function currentHerdrWorkspaceIsFocused(
+	pi: ExtensionAPI,
+	cwd: string,
+): Promise<boolean> {
+	const paneResponse = await herdrJson<PaneCurrent>(
+		pi,
+		["pane", "current", "--current"],
+		undefined,
+		cwd,
+		10_000,
+	);
+	const workspaceId = paneResponse.result?.pane?.workspace_id;
+	if (!workspaceId) throw new Error("Herdr pane current response did not include pane.workspace_id");
+
+	const workspaceResponse = await herdrJson<WorkspaceInfo>(
+		pi,
+		["workspace", "get", workspaceId],
+		undefined,
+		cwd,
+		10_000,
+	);
+	return workspaceResponse.result?.workspace?.workspace_id === workspaceId &&
+		workspaceResponse.result.workspace.focused === true;
+}
+
+async function focusHerdrTarget(
+	pi: ExtensionAPI,
+	target: { workspaceId: string; tabId?: string },
+	cwd: string,
+): Promise<void> {
+	await herdr(pi, ["workspace", "focus", target.workspaceId], undefined, cwd, 10_000);
+	if (target.tabId) await herdr(pi, ["tab", "focus", target.tabId], undefined, cwd, 10_000);
 }
 
 async function runInHerdrPane(

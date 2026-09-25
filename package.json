@@ -1,6 +1,6 @@
 {
   "name": "pi-gibbon",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Configurable Pi session relocation across Git worktrees.",
   "private": true,
   "type": "module",

@@ -14,10 +14,18 @@ type Command = {
 	handler: (args: string, ctx: any) => Promise<void>;
 };
 
+type HerdrBehavior = {
+	focusLookupFails?: boolean;
+	launchSucceeds?: boolean;
+	sourceWorkspaceFocused?: boolean;
+	targetHasTab?: boolean;
+};
+
 async function prepareMainJump(
 	t: TestContext,
 	signal?: AbortSignal,
 	multiplexer: "none" | "herdr" = "none",
+	herdrBehavior: HerdrBehavior = {},
 ) {
 	const root = await mkdtemp(join(tmpdir(), "pi-gibbon-lifecycle-"));
 	const mainCheckout = join(root, "main");
@@ -42,7 +50,7 @@ async function prepareMainJump(
 	delete process.env.PI_GIBBON_CONFIG;
 	if (multiplexer === "herdr") {
 		process.env.HERDR_ENV = "1";
-		process.env.HERDR_PANE_ID = "w1:p-source";
+		process.env.HERDR_PANE_ID = "w-original:p-source";
 	}
 	t.after(async () => {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -86,6 +94,7 @@ async function prepareMainJump(
 	const tools = new Map<string, Tool>();
 	const commands = new Map<string, Command>();
 	const herdrCalls: string[][] = [];
+	const shellCalls: string[][] = [];
 	let dispatched = "";
 	const pi = {
 		on() {},
@@ -99,7 +108,10 @@ async function prepareMainJump(
 			dispatched = message;
 		},
 		async exec(command: string, args: string[]) {
-			if (command === "sh" && multiplexer === "herdr") return success();
+			if (command === "sh" && multiplexer === "herdr") {
+				shellCalls.push(args);
+				return success();
+			}
 			if (command === "herdr" && multiplexer === "herdr") {
 				herdrCalls.push(args);
 				if (args[0] === "worktree" && args[1] === "open") {
@@ -107,7 +119,7 @@ async function prepareMainJump(
 						id: "test",
 						result: {
 							workspace: { workspace_id: "w-target" },
-							tab: { tab_id: "w-target:t1" },
+							...(herdrBehavior.targetHasTab === false ? {} : { tab: { tab_id: "w-target:t1" } }),
 							root_pane: { pane_id: "w-target:p1" },
 							worktree: { path: mainCheckout, branch: "main" },
 							already_open: false,
@@ -115,8 +127,41 @@ async function prepareMainJump(
 					}));
 				}
 				if (args[0] === "pane" && args[1] === "run") {
-					return { stdout: "", stderr: "replacement launch failed", code: 1, killed: false };
+					if (!herdrBehavior.launchSucceeds) {
+						return { stdout: "", stderr: "replacement launch failed", code: 1, killed: false };
+					}
+					const readyFile = args[3]?.match(/PI_GIBBON_READY_FILE=([^']+)/)?.[1];
+					assert.ok(readyFile, "replacement command must include its readiness file");
+					await writeFile(readyFile, "replacement-ready\n", "utf8");
+					return success();
 				}
+				if (args[0] === "pane" && args[1] === "current") {
+					assert.deepEqual(args, ["pane", "current", "--current"]);
+					return success(JSON.stringify({
+						id: "test",
+						result: {
+							type: "pane_current",
+							pane: { workspace_id: "w-live-source" },
+						},
+					}));
+				}
+				if (args[0] === "workspace" && args[1] === "get") {
+					if (herdrBehavior.focusLookupFails) {
+						return { stdout: "", stderr: "source workspace disappeared", code: 1, killed: false };
+					}
+					return success(JSON.stringify({
+						id: "test",
+						result: {
+							type: "workspace_info",
+							workspace: {
+								workspace_id: "w-live-source",
+								focused: herdrBehavior.sourceWorkspaceFocused ?? true,
+							},
+						},
+					}));
+				}
+				if (args[0] === "workspace" && args[1] === "focus") return success();
+				if (args[0] === "tab" && args[1] === "focus") return success();
 				if (args[0] === "pane" && args[1] === "close") return success();
 				throw new Error(`Unexpected Herdr command: ${args.join(" ")}`);
 			}
@@ -155,7 +200,7 @@ async function prepareMainJump(
 	const command = commands.get("worktree-jump");
 	assert.ok(command);
 
-	return { command, herdrCalls, mainCheckout, oldSessionFile, statuses, token };
+	return { command, herdrCalls, mainCheckout, oldSessionFile, shellCalls, statuses, token };
 }
 
 function success(stdout = "") {
@@ -268,6 +313,88 @@ test("a failed in-process switch removes the orphaned fork and clears source sta
 	await assert.rejects(access(forkedFile));
 	await access(prepared.oldSessionFile);
 	assert.equal(prepared.statuses.at(-1), undefined);
+});
+
+for (const scenario of [
+	{ sourceWorkspaceFocused: true, expectedDestinationFocus: true, label: "focused" },
+	{ sourceWorkspaceFocused: false, expectedDestinationFocus: false, label: "not focused" },
+]) {
+	test(`a ready Herdr replacement only takes focus when the source workspace is ${scenario.label}`, async (t) => {
+		const prepared = await prepareMainJump(t, undefined, "herdr", {
+			launchSucceeds: true,
+			sourceWorkspaceFocused: scenario.sourceWorkspaceFocused,
+		});
+		let shutdownCalls = 0;
+		await prepared.command.handler(prepared.token, {
+			signal: undefined,
+			waitForIdle: async () => undefined,
+			ui: commandUi(prepared.statuses, []),
+			shutdown() { shutdownCalls += 1; },
+		});
+
+		const openCall = prepared.herdrCalls.find((args) => args[0] === "worktree" && args[1] === "open");
+		assert.ok(openCall);
+		assert.ok(openCall.includes("--no-focus"));
+		assert.equal(openCall.includes("--focus"), false);
+		const runIndex = prepared.herdrCalls.findIndex((args) => args[0] === "pane" && args[1] === "run");
+		const currentPaneIndex = prepared.herdrCalls.findIndex((args) => args[0] === "pane" && args[1] === "current");
+		const sourceFocusIndex = prepared.herdrCalls.findIndex(
+			(args) => args[0] === "workspace" && args[1] === "get" && args[2] === "w-live-source",
+		);
+		const targetWorkspaceFocusIndex = prepared.herdrCalls.findIndex(
+			(args) => args[0] === "workspace" && args[1] === "focus" && args[2] === "w-target",
+		);
+		const targetTabFocusIndex = prepared.herdrCalls.findIndex(
+			(args) => args[0] === "tab" && args[1] === "focus" && args[2] === "w-target:t1",
+		);
+		assert.ok(runIndex < currentPaneIndex && currentPaneIndex < sourceFocusIndex);
+		if (scenario.expectedDestinationFocus) {
+			assert.ok(sourceFocusIndex < targetWorkspaceFocusIndex);
+			assert.ok(targetWorkspaceFocusIndex < targetTabFocusIndex);
+		} else {
+			assert.equal(targetWorkspaceFocusIndex, -1);
+			assert.equal(targetTabFocusIndex, -1);
+		}
+		assert.equal(shutdownCalls, 1);
+	});
+}
+
+test("Herdr focuses the destination workspace when an opened worktree has no tab id", async (t) => {
+	const prepared = await prepareMainJump(t, undefined, "herdr", {
+		launchSucceeds: true,
+		targetHasTab: false,
+	});
+	await prepared.command.handler(prepared.token, {
+		signal: undefined,
+		waitForIdle: async () => undefined,
+		ui: commandUi(prepared.statuses, []),
+		shutdown() {},
+	});
+	assert.ok(prepared.herdrCalls.some(
+		(args) => args[0] === "workspace" && args[1] === "focus" && args[2] === "w-target",
+	));
+	assert.equal(prepared.herdrCalls.some((args) => args[0] === "tab" && args[1] === "focus"), false);
+});
+
+test("a failed Herdr focus check leaves the destination in the background and still finishes cleanup", async (t) => {
+	const prepared = await prepareMainJump(t, undefined, "herdr", {
+		focusLookupFails: true,
+		launchSucceeds: true,
+	});
+	const notifications: string[] = [];
+	let shutdownCalls = 0;
+	await prepared.command.handler(prepared.token, {
+		signal: undefined,
+		waitForIdle: async () => undefined,
+		ui: commandUi(prepared.statuses, notifications),
+		shutdown() { shutdownCalls += 1; },
+	});
+	assert.equal(prepared.herdrCalls.some(
+		(args) => (args[0] === "workspace" || args[0] === "tab") && args[1] === "focus",
+	), false);
+	assert.ok(notifications.some((message) => message.includes("left in the background")));
+	assert.ok(prepared.shellCalls.some((args) => args[1]?.includes("old_pid=")));
+	assert.equal(shutdownCalls, 1);
 });
 
 test("a failed Herdr launch closes its replacement pane, removes the fork, and preserves the source", async (t) => {

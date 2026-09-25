@@ -87,7 +87,7 @@ Worktree materialization and session relocation are separate operations:
 4. If the original tool call was aborted, finalization stops and retains the checkout.
 5. Otherwise the complete session is forked into the destination cwd and the selected multiplexer adapter relocates Pi.
 
-For Herdr relocation, replacement Pi must publish its `session_start` readiness marker before the source shuts down. A failed or timed-out replacement is closed while the source remains active. Source session deletion and pane closure occur only after the source PID exits; a timeout preserves both rather than risking the live session.
+For Herdr relocation, the destination is always opened without focus and replacement Pi must publish its `session_start` readiness marker before the source shuts down. Once ready, the destination is focused only when the originating workspace is still focused; if the user moved elsewhere while the jump was running, their current workspace remains uninterrupted. A failed or timed-out replacement is closed while the source remains active. Source session deletion and pane closure occur only after the source PID exits; a timeout preserves both rather than risking the live session.
 
 For an in-process switch, cleanup and continuation use Pi's replacement session context rather than the stale source context.
 
