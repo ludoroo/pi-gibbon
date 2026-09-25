@@ -11,7 +11,10 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 test("package has one explicit Pi entrypoint and no conventional duplicate entrypoint", async () => {
 	const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as Record<string, any>;
 	assert.equal(manifest.name, "pi-gibbon");
-	assert.equal(manifest.private, true);
+	assert.equal(manifest.private, undefined);
+	assert.deepEqual(manifest.files, ["src", "pi-gibbon.example.json", "THIRD_PARTY_NOTICES.md"]);
+	assert.equal(manifest.repository.url, "git+https://github.com/ludoroo/pi-gibbon.git");
+	assert.deepEqual(manifest.publishConfig, { access: "public" });
 	assert.deepEqual(manifest.pi, { extensions: ["./src/index.ts"] });
 	assert.deepEqual(manifest.dependencies, undefined);
 	assert.deepEqual(manifest.peerDependencies, {

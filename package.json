@@ -1,8 +1,7 @@
 {
   "name": "pi-gibbon",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Configurable Pi session relocation across Git worktrees.",
-  "private": true,
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -16,7 +15,19 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/ludoroo/pi-gibbon.git"
+    "url": "git+https://github.com/ludoroo/pi-gibbon.git"
+  },
+  "homepage": "https://github.com/ludoroo/pi-gibbon#readme",
+  "bugs": {
+    "url": "https://github.com/ludoroo/pi-gibbon/issues"
+  },
+  "files": [
+    "src",
+    "pi-gibbon.example.json",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22.19.0"

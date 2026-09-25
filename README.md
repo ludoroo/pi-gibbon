@@ -1,6 +1,6 @@
 # pi-gibbon
 
-`pi-gibbon` is a private [Pi](https://github.com/badlogic/pi-mono) package for safely relocating an active Pi session between Git worktrees.
+`pi-gibbon` is a [Pi](https://github.com/badlogic/pi-mono) package for safely relocating an active Pi session between Git worktrees.
 
 Its public identities are deliberately stable:
 
@@ -21,21 +21,19 @@ The tool exposes relocation intent only: `destination`, `branch`, `base`, and `l
 
 Native Git is the fallback worktree backend. Outside Herdr, Pi can switch to the forked session in process. The `tmux` adapter name is reserved but intentionally reports that it is not implemented.
 
-## Install from the private repository
+## Install
 
-Configure SSH access to `ludoroo/pi-gibbon`, then install an immutable release ref:
-
-```sh
-pi install 'git:git@github.com:ludoroo/pi-gibbon.git@v0.1.0'
-```
-
-On machines where the personal GitHub key is selected through the `ludoroo.github.com` SSH alias:
+Install the package from npm:
 
 ```sh
-pi install 'git:git@ludoroo.github.com:ludoroo/pi-gibbon.git@v0.1.0'
+pi install npm:pi-gibbon
 ```
 
-A pinned tag or commit does not advance during `pi update --extensions`. Install the next explicit tag when upgrading.
+Update it later with:
+
+```sh
+pi update npm:pi-gibbon
+```
 
 Pi loads exactly one declared entrypoint from `package.json`:
 
