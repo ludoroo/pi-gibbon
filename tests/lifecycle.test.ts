@@ -17,6 +17,8 @@ type Command = {
 type HerdrBehavior = {
 	focusLookupFails?: boolean;
 	launchSucceeds?: boolean;
+	blockedStartup?: boolean;
+	onLaunch?: () => void;
 	sourceWorkspaceFocused?: boolean;
 	targetHasTab?: boolean;
 };
@@ -130,6 +132,8 @@ async function prepareMainJump(
 					if (!herdrBehavior.launchSucceeds) {
 						return { stdout: "", stderr: "replacement launch failed", code: 1, killed: false };
 					}
+					herdrBehavior.onLaunch?.();
+					if (herdrBehavior.blockedStartup) return success();
 					const readyFile = args[3]?.match(/PI_GIBBON_READY_FILE=([^']+)/)?.[1];
 					assert.ok(readyFile, "replacement command must include its readiness file");
 					await writeFile(readyFile, "replacement-ready\n", "utf8");
@@ -297,22 +301,35 @@ test("a cancelled in-process switch removes the unused fork and retains the sour
 	assert.ok(notifications.some((message) => message.includes("cancelled")));
 });
 
-test("a failed in-process switch removes the orphaned fork and clears source status", async (t) => {
+test("a switch failure after source teardown preserves recovery files without reusing the source context", async (t) => {
 	const prepared = await prepareMainJump(t);
 	let forkedFile = "";
-	const failure = new Error("switch failed before activation");
+	let sourceInvalidated = false;
+	const failure = new Error("destination initialization failed");
 	await assert.rejects(
 		prepared.command.handler(prepared.token, {
 			waitForIdle: async () => undefined,
-			ui: commandUi(prepared.statuses, []),
-			async switchSession(path: string) { forkedFile = path; throw failure; },
+			ui: {
+				setStatus() { assert.equal(sourceInvalidated, false, "source context must not be reused after teardown"); },
+				notify() { assert.equal(sourceInvalidated, false); },
+			},
+			async switchSession(path: string) {
+				forkedFile = path;
+				sourceInvalidated = true;
+				throw failure;
+			},
 		}),
-		failure,
+		(error: unknown) => {
+			assert.ok(error instanceof Error);
+			assert.equal(error.cause, failure);
+			assert.ok(error.message.includes(prepared.oldSessionFile));
+			assert.ok(error.message.includes(forkedFile));
+			return true;
+		},
 	);
 	assert.ok(forkedFile);
-	await assert.rejects(access(forkedFile));
+	await access(forkedFile);
 	await access(prepared.oldSessionFile);
-	assert.equal(prepared.statuses.at(-1), undefined);
 });
 
 for (const scenario of [
@@ -395,6 +412,27 @@ test("a failed Herdr focus check leaves the destination in the background and st
 	assert.ok(notifications.some((message) => message.includes("left in the background")));
 	assert.ok(prepared.shellCalls.some((args) => args[1]?.includes("old_pid=")));
 	assert.equal(shutdownCalls, 1);
+});
+
+test("blocked Herdr startup identifies the approval workspace and safely handles cancellation", async (t) => {
+	const controller = new AbortController();
+	const prepared = await prepareMainJump(t, undefined, "herdr", {
+		launchSucceeds: true,
+		blockedStartup: true,
+		onLaunch: () => { setImmediate(() => controller.abort()); },
+	});
+	const notifications: string[] = [];
+	await assert.rejects(prepared.command.handler(prepared.token, {
+		signal: controller.signal,
+		waitForIdle: async () => undefined,
+		ui: commandUi(prepared.statuses, notifications),
+		shutdown() { assert.fail("source must remain active while destination startup is blocked"); },
+	}), /replacement pane was closed and the old session remains active/);
+	assert.ok(notifications.some((message) => message.includes("w-target") && message.includes("trust approval") && message.includes("60 seconds")));
+	assert.ok(prepared.herdrCalls.some((args) => args[0] === "pane" && args[1] === "close"));
+	assert.equal(prepared.herdrCalls.some((args) => args[1] === "focus"), false);
+	assert.deepEqual(await SessionManager.list(await realpath(prepared.mainCheckout)), []);
+	await access(prepared.oldSessionFile);
 });
 
 test("a failed Herdr launch closes its replacement pane, removes the fork, and preserves the source", async (t) => {

@@ -12,7 +12,7 @@ import {
 import { StringEnum } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { lstat, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import {
@@ -29,10 +29,11 @@ import {
 import { buildOldPaneCleanupLauncher, shellQuote } from "./cleanup.ts";
 import { loadConfig } from "./config.ts";
 
-type JumpDestination = "new" | "main";
+type JumpDestination = "new" | "existing" | "main";
 
 type JumpOptions = {
 	destination: JumpDestination;
+	repository?: string;
 	branch?: string;
 	base?: string;
 	label?: string;
@@ -53,7 +54,8 @@ type PendingJump = {
 	multiplexer: ResolvedMultiplexerName;
 	destination: JumpDestination;
 	target: WorktreeTarget;
-	repository: Repository;
+	sourceRepository: Repository;
+	targetRepository: Repository;
 	label?: string;
 	oldSessionFile: string;
 	signal?: AbortSignal;
@@ -172,24 +174,28 @@ export default function (pi: ExtensionAPI) {
 		name: "worktree_jump",
 		label: "pi-gibbon · Worktree Jump",
 		description:
-			"Relocate this Pi session to a linked Git worktree or back to the repository's main checkout. Pi-gibbon automatically uses the configured worktree and terminal integrations. This is an explicit session relocation, not a general isolation or worktree-planning tool.",
-		promptSnippet: "Jump this Pi session to another worktree only when explicitly requested",
+			"Relocate this Pi session to a linked Git worktree, an explicitly specified existing checkout, or a repository's main checkout. An optional repository selects another existing local Git checkout. Pi-gibbon automatically uses the configured worktree and terminal integrations. This is an explicit session relocation, not a general isolation or worktree-planning tool.",
+		promptSnippet: "Jump this Pi session to another Git checkout only when explicitly requested",
 		promptGuidelines: [
-			"Use worktree_jump only when the user explicitly asks to jump or move this Pi session into a new worktree or back to the repository's main checkout.",
+			"Use worktree_jump only when the user explicitly asks to move this Pi session to a new worktree, an explicitly specified existing checkout, or a repository's main checkout; this includes an explicitly requested cross-repository move.",
+			"For cross-repository moves, use only a repository path the user explicitly provided; never guess or invent repository paths.",
 			"Never use worktree_jump merely because isolation would be useful, repository instructions recommend a worktree, or the task appears non-trivial.",
 		],
 		parameters: Type.Object({
 			destination: Type.Optional(
-				StringEnum(["new", "main"] as const, {
-					description: "Use new to create/open a worktree, or main to return to the primary checkout. Defaults to new.",
+				StringEnum(["new", "existing", "main"] as const, {
+					description: "Use new to create/open a worktree, existing to use the specified checkout exactly, or main to use the repository's primary checkout. Defaults to new.",
 				}),
+			),
+			repository: Type.Optional(
+				Type.String({ description: "Existing local Git checkout to target; absolute, ~/ or relative to the current session directory. The path must be the checkout root." }),
 			),
 			branch: Type.Optional(
 				Type.String({ description: "Branch name for destination=new. Required when creating or opening a worktree." }),
 			),
 			base: Type.Optional(
 				Type.String({
-					description: "Git ref used as the base when destination=new creates a branch. Defaults to the current checkout's HEAD.",
+					description: "Git ref used as the base when destination=new creates a branch. Defaults to the selected repository checkout's HEAD, or the current checkout's HEAD when repository is omitted.",
 				}),
 			),
 			label: Type.Optional(Type.String({ description: "Optional destination workspace label when supported." })),
@@ -199,6 +205,7 @@ export default function (pi: ExtensionAPI) {
 			jumpInFlight = true;
 			const options: JumpOptions = {
 				destination: params.destination ?? "new",
+				repository: cleanOptional(params.repository),
 				branch: cleanOptional(params.branch),
 				base: cleanOptional(params.base),
 				label: cleanOptional(params.label),
@@ -225,7 +232,11 @@ async function prepareJump(
 	const currentFile = ctx.sessionManager.getSessionFile();
 	if (!currentFile) throw new Error("Current Pi session is not persisted, so it cannot jump to a worktree");
 	if (options.destination === "main" && (options.branch || options.base || options.label)) {
-		throw new Error("branch, base, and label apply only when destination is new");
+		throw new Error("branch, base, and label cannot be used when destination is main");
+	}
+	if (options.destination === "existing") {
+		if (!options.repository) throw new Error("repository is required when destination is existing");
+		if (options.branch || options.base) throw new Error("branch and base apply only when destination is new");
 	}
 
 	const selectedMultiplexer = config.multiplexer;
@@ -247,20 +258,35 @@ async function prepareJump(
 
 	ctx.ui.setStatus(STATUS_KEY, "resolving repository");
 	try {
-		const repository = await resolveRepository(pi, signal, ctx.cwd);
+		const sourceRepository = await resolveRepository(pi, signal, ctx.cwd);
+		const targetRepository = options.repository
+			? await resolveSpecifiedRepository(pi, signal, options.repository, ctx.cwd)
+			: sourceRepository;
 		let target: WorktreeTarget;
 		let usedBackend: ResolvedBackendName | "existing-main";
 		if (options.destination === "main") {
-			if (repository.currentCheckout === repository.mainCheckout) {
-				throw new Error(`Pi is already inside the main checkout: ${repository.mainCheckout}`);
-			}
-			target = { worktreePath: repository.mainCheckout, branch: await currentBranch(pi, signal, repository.mainCheckout) };
+			target = {
+				worktreePath: targetRepository.mainCheckout,
+				branch: await currentBranch(pi, signal, targetRepository.mainCheckout),
+			};
+			usedBackend = "existing-main";
+		} else if (options.destination === "existing") {
+			target = {
+				worktreePath: targetRepository.currentCheckout,
+				branch: await currentBranch(pi, signal, targetRepository.currentCheckout),
+			};
 			usedBackend = "existing-main";
 		} else {
 			if (!options.branch) throw new Error("branch is required when creating or opening a worktree");
 			if (!backend) throw new Error("Worktree backend was not resolved");
 			ctx.ui.setStatus(STATUS_KEY, `creating worktree with ${backend}`);
-			target = await BACKEND_ADAPTERS[backend].create(pi, signal, repository, ctx.cwd, options);
+			target = await BACKEND_ADAPTERS[backend].create(
+				pi,
+				signal,
+				targetRepository,
+				options.repository ? targetRepository.currentCheckout : ctx.cwd,
+				options,
+			);
 			usedBackend = backend;
 		}
 
@@ -268,13 +294,17 @@ async function prepareJump(
 			...target,
 			worktreePath: await canonicalDirectory(target.worktreePath),
 		};
+		if (canonicalTarget.worktreePath === sourceRepository.currentCheckout) {
+			throw new Error(`Pi is already inside the requested checkout: ${canonicalTarget.worktreePath}`);
+		}
 		const token = randomUUID();
 		const prepared: PendingJump = {
 			backend: usedBackend,
 			multiplexer,
 			destination: options.destination,
 			target: canonicalTarget,
-			repository,
+			sourceRepository,
+			targetRepository,
 			label: options.label,
 			oldSessionFile: currentFile,
 			signal,
@@ -347,6 +377,21 @@ async function resolveRepository(
 	};
 }
 
+async function resolveSpecifiedRepository(
+	pi: ExtensionAPI,
+	signal: AbortSignal | undefined,
+	path: string,
+	cwd: string,
+): Promise<Repository> {
+	const expandedPath = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+	const requestedRoot = await canonicalDirectory(resolve(cwd, expandedPath));
+	const repository = await resolveRepository(pi, signal, requestedRoot);
+	if (repository.currentCheckout !== requestedRoot) {
+		throw new Error(`repository path must be a checkout root (not a subdirectory): ${requestedRoot}`);
+	}
+	return repository;
+}
+
 async function createWorktrunkWorktree(
 	pi: ExtensionAPI,
 	signal: AbortSignal | undefined,
@@ -365,7 +410,6 @@ async function createWorktrunkWorktree(
 	const switched = await worktrunkJson<WorktrunkSwitched>(pi, args, signal, currentDirectory, 120_000);
 	if (!switched.path) throw new Error("Worktrunk switch response did not include path");
 	const worktreePath = await canonicalDirectory(switched.path);
-	if (worktreePath === repository.currentCheckout) throw new Error(`Pi is already inside worktree: ${worktreePath}`);
 	return { worktreePath, branch: switched.branch ?? branch };
 }
 
@@ -389,7 +433,6 @@ async function createGitWorktree(
 	const existing = parseGitWorktrees(listResult.stdout).find((worktree) => worktree.branch === branch);
 	if (existing) {
 		const existingPath = await canonicalDirectory(existing.path);
-		if (existingPath === repository.currentCheckout) throw new Error(`Pi is already inside worktree: ${existingPath}`);
 		if (options.base) throw new Error("base cannot be used when the Git branch is already checked out");
 		return { worktreePath: existingPath, branch };
 	}
@@ -401,12 +444,16 @@ async function createGitWorktree(
 		if (options.base) throw new Error("base cannot be used when the Git branch already exists");
 		args.push("--no-guess-remote", worktreePath, branch);
 	} else {
-		let base = options.base;
-		if (!base) {
-			const head = await git(pi, ["rev-parse", "--verify", "HEAD^{commit}"], signal, currentDirectory, 10_000);
-			base = head.stdout.trim();
-		}
-		args.push("--no-track", "-b", branch, worktreePath, base);
+		// Resolve checkout-relative refs (HEAD, HEAD~1, @{upstream}, etc.)
+		// against the named checkout, not the primary checkout used to add it.
+		const base = await git(
+			pi,
+			["rev-parse", "--verify", "--end-of-options", `${options.base ?? "HEAD"}^{commit}`],
+			signal,
+			currentDirectory,
+			10_000,
+		);
+		args.push("--no-track", "-b", branch, worktreePath, base.stdout.trim());
 	}
 	await git(pi, args, signal, repository.mainCheckout, 120_000);
 	return { worktreePath: await canonicalDirectory(worktreePath), branch };
@@ -440,8 +487,13 @@ async function relocateWithoutMultiplexer(
 		});
 	} catch (error) {
 		if (!replacementActivated) {
-			await rm(newSessionFile, { force: true }).catch(() => undefined);
-			ctx.ui.setStatus(STATUS_KEY, undefined);
+			// switchSession can tear down the source before destination startup
+			// fails. Neither the old context nor either recovery file is safe to
+			// discard merely because withSession has not run yet.
+			throw new Error(
+				`${errorMessage(error)}. Source session retained at ${oldSessionFile}; destination fork retained at ${newSessionFile}. Resume the source if Pi exited.`,
+				{ cause: error },
+			);
 		}
 		throw error;
 	}
@@ -467,7 +519,7 @@ async function relocateWithHerdr(
 		target = await openHerdrTarget(
 			pi,
 			ctx.signal,
-			jump.repository.mainCheckout,
+			jump.targetRepository.mainCheckout,
 			jump.target.worktreePath,
 			jump.label,
 		);
@@ -479,6 +531,10 @@ async function relocateWithHerdr(
 	const readyFile = join(tmpdir(), `pi-gibbon-${randomUUID()}.ready`);
 	await rm(readyFile, { force: true });
 	try {
+		ctx.ui.notify(
+			`Starting Pi in Herdr workspace ${target.workspaceId} (pane ${target.rootPaneId}). If repository trust approval is requested, open that workspace and respond within 60 seconds. The source remains available until startup completes.`,
+			"info",
+		);
 		await runInHerdrPane(pi, ctx.signal, target.rootPaneId, newSessionFile, jump.target.worktreePath, readyFile);
 		await waitForReadyFile(readyFile, ctx.signal, 60_000);
 	} catch (error) {
@@ -505,7 +561,7 @@ async function relocateWithHerdr(
 	try {
 		// Herdr has no atomic conditional-focus command. Resolve the pane's live
 		// workspace immediately before focusing to keep this race window minimal.
-		if (await currentHerdrWorkspaceIsFocused(pi, jump.repository.mainCheckout)) {
+		if (await currentHerdrWorkspaceIsFocused(pi, jump.sourceRepository.mainCheckout)) {
 			await focusHerdrTarget(pi, target, jump.target.worktreePath);
 		}
 	} catch (error) {
