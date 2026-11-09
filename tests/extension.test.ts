@@ -38,7 +38,7 @@ test("tool schema exposes relocation intent but not infrastructure selection", (
 	const { tools } = registerExtension();
 	const tool = tools[0];
 	const parameters = tool?.parameters as { properties: Record<string, unknown> };
-	assert.deepEqual(Object.keys(parameters.properties), ["destination", "branch", "base", "label"]);
+	assert.deepEqual(Object.keys(parameters.properties), ["destination", "repository", "branch", "base", "label"]);
 	assert.equal("backend" in parameters.properties, false);
 	assert.equal("multiplexer" in parameters.properties, false);
 	assert.equal(tool?.prepareArguments, undefined);

@@ -6,13 +6,13 @@
 [![release](https://img.shields.io/npm/v/pi-gibbon?label=release)](https://www.npmjs.com/package/pi-gibbon)
 [![license: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-Keep your [Pi](https://github.com/badlogic/pi-mono) session moving with your code: pi-gibbon swings the full conversation into another Git worktree—and, in Herdr, into its destination workspace—without missing a beat.
+Keep your [Pi](https://github.com/badlogic/pi-mono) session moving with your code: pi-gibbon swings the full conversation into another Git checkout, in the same repository or a different one—and, in Herdr, into its destination workspace—without missing a beat.
 
 ## What it does
 
-When a task should continue on a different branch, ask Pi to move the current session. `pi-gibbon` will:
+When a task should continue on a different branch or in another local repository, ask Pi to move the current session. `pi-gibbon` will:
 
-1. Create or open the requested Git worktree.
+1. Resolve an existing Git checkout or create/open the requested worktree.
 2. Fork the complete Pi session into that checkout.
 3. Start the replacement session in the new working directory.
 4. Continue the conversation with its existing context intact.
@@ -36,7 +36,17 @@ To return to the repository's primary checkout:
 
 > Move this session back to the main checkout.
 
-The extension deliberately acts only on explicit relocation requests. Creating a checkout or discussing worktree strategy does not move the session.
+To move into an existing checkout in another local repository:
+
+> Move this session to the checkout at `/Users/me/code/other-project`.
+
+The specified checkout is used exactly as named, including when it is a linked worktree. Its branch is not changed. You can also create or open a worktree in another repository:
+
+> Move this session to a worktree on branch `fix-login` in the repository at `/Users/me/code/other-project`.
+
+Only the conversation moves. Uncommitted code stays in its original checkout; repositories are not cloned. Existing same-repository requests work unchanged.
+
+The extension deliberately acts only on explicit relocation requests. Creating a checkout or discussing worktree strategy does not move the session. Provide the destination repository path explicitly; Pi should not guess it.
 
 ## Requirements
 
@@ -98,10 +108,29 @@ worktree_jump
 
 It accepts:
 
-- `destination`: `new` or `main`; defaults to `new`
+- `destination`: `new`, `main`, or `existing`; defaults to `new`
+- `repository`: optional path to an existing local Git checkout; required for `destination: existing`. Absolute paths and `~/` are supported; relative paths resolve against the current session's working directory. Specify the checkout root, not a subdirectory.
 - `branch`: branch to create or open; required for `destination: new`
-- `base`: optional starting ref when creating a branch
-- `label`: optional destination workspace label
+- `base`: optional starting ref when creating a branch; defaults to the selected checkout's `HEAD`
+- `label`: optional destination workspace label for `new` or `existing`
+
+Without `repository`, `new` and `main` use the current repository as before. With `repository`, `new` creates or opens a worktree in that repository, and `main` targets its primary checkout. `existing` targets the exact checkout specified by `repository`, without creating a worktree or changing branches; `branch` and `base` are not allowed.
+
+For example, to move into an existing checkout:
+
+```json
+{ "destination": "existing", "repository": "/Users/me/code/other-project" }
+```
+
+To create or open a branch's worktree in that repository:
+
+```json
+{
+  "destination": "new",
+  "repository": "/Users/me/code/other-project",
+  "branch": "fix-login"
+}
+```
 
 The internal `/worktree-jump` command and `PI_GIBBON_READY_FILE` environment variable coordinate relocation. They are not user-facing configuration.
 
@@ -120,7 +149,7 @@ Pi loads the extension through the package manifest:
 
 Worktree creation and session relocation are separate operations:
 
-1. The selected backend resolves or creates the checkout.
+1. The destination is validated as a local Git checkout; for `new`, the selected backend resolves or creates its worktree.
 2. `worktree_jump` queues relocation after the current tool turn settles.
 3. Pi waits for the current agent turn to become idle, ensuring its result is saved.
 4. If the original request was aborted, relocation stops and retains the checkout.
@@ -128,7 +157,11 @@ Worktree creation and session relocation are separate operations:
 
 For Herdr relocation, the destination opens without focus and replacement Pi must report ready before the source shuts down. The destination receives focus only if the originating workspace is still focused. A failed or timed-out replacement is closed while the source remains active.
 
-Source-session deletion and pane closure occur only after the source process exits. A cleanup timeout preserves both sessions rather than risking the live one.
+For Herdr, source-session deletion and pane closure occur only after the source process exits. A cleanup timeout preserves both sessions rather than risking the live one. For in-process relocation, the source session is removed only after the replacement is activated. If switching throws during destination initialization, recovery session files are retained; Pi may exit, requiring you to resume the source session.
+
+Cross-repository relocation does not bypass repository trust checks. Pi handles destination project resources according to its normal trust rules. With Herdr, a first-time trust prompt may appear in the background destination workspace: the startup notification identifies it. Open that workspace and answer within the 60-second readiness window, or the replacement is closed and the source remains active. You can retry after reviewing and resolving trust.
+
+Herdr readiness requires `pi-gibbon` to load in the destination Pi process too. Install it at user scope (as shown above) so it is available across repositories. Loading it only in the source project or through a source-only `-e` flag is insufficient unless the destination also loads it.
 
 ## Development
 
