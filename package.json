@@ -1,6 +1,6 @@
 {
   "name": "pi-gibbon",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Configurable Pi session relocation across Git worktrees.",
   "type": "module",
   "license": "MIT",
